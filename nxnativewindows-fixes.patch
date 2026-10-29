@@ -1,0 +1,754 @@
+diff --git a/.github/workflows/lint-python.yml b/.github/workflows/lint-python.yml
+index 2f25115..ee679c2 100644
+--- a/.github/workflows/lint-python.yml
++++ b/.github/workflows/lint-python.yml
+@@ -7,10 +7,10 @@ name: lint-python
+ 
+ on:
+   pull_request:
+-    paths: ['**.py', pyproject.toml, .github/requirements/lint.txt, .github/workflows/lint-python.yml, dm/tools/lint_python_baseline.tsv]
++    paths: ['**.py', '**.pyw', pyproject.toml, .github/requirements/lint.txt, .github/workflows/lint-python.yml, dm/tools/lint_python_baseline.tsv]
+   push:
+     branches: [main]
+-    paths: ['**.py', pyproject.toml, .github/requirements/lint.txt, .github/workflows/lint-python.yml, dm/tools/lint_python_baseline.tsv]
++    paths: ['**.py', '**.pyw', pyproject.toml, .github/requirements/lint.txt, .github/workflows/lint-python.yml, dm/tools/lint_python_baseline.tsv]
+   workflow_dispatch:
+ 
+ permissions:
+@@ -28,7 +28,7 @@ defaults:
+ jobs:
+   lint:
+     name: ruff and pyright (ratchet)
+-    runs-on: ubuntu-24.04   # pyproject.toml fixes the platform pyright assumes (Darwin), so the findings match a Mac's
++    runs-on: ubuntu-24.04   # pyproject.toml assumes Darwin for scripts/ and dm/ and Windows for win/, so the findings match each platform's
+     timeout-minutes: 10
+     steps:
+       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+diff --git a/.gitignore b/.gitignore
+index 4b1f852..bcc72a9 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -12,6 +12,5 @@ dm/games/*/cb_extent.tsv
+ win/toolchain.json
+ win/sdk/out/
+ win/build/
+-__pycache__/
+ win/sdk/extract.log
+ win/gui_settings.json
+diff --git a/AGENTS.md b/AGENTS.md
+index 289ed9e..b3a89f1 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -1,6 +1,6 @@
+ # Notes for agents
+ 
+-- This repository runs Nintendo Switch games natively on Apple platforms: the game's own code runs, rewritten only where Apple's kernel requires it (`dm/tools/patch_nso.py`), on a host that answers Horizon's SVCs and the SDK's services (`dm/host`) and implements NVN, Vulkan and NVIDIA's desktop OpenGL on Metal (`dm/gfx/nvn`, `dm/gfx/vk`, `dm/gfx/gl`). Every game in the [games table](dm/games/README.md#games) is playable, tested on the Mac or the iPhone (a Mac gameplay test is enough to count); the table lists each with its build, SDK, engine and graphics API, and links its note, `dm/games/<id>/README.md`: what its profile needs and why, what was found on it, how to drive it on the Mac, what is open. [README.md](README.md) is the player-facing page (games, packing, playing); [docs/development.md](docs/development.md) has the internals, the script's options, building by hand, prewarm lists and power.
++- This repository runs Nintendo Switch games natively on Apple platforms: the game's own code runs, rewritten only where Apple's kernel requires it (`dm/tools/patch_nso.py`), on a host that answers Horizon's SVCs and the SDK's services (`dm/host`) and implements NVN, Vulkan and NVIDIA's desktop OpenGL on Metal (`dm/gfx/nvn`, `dm/gfx/vk`, `dm/gfx/gl`). Every game in the [games table](dm/games/README.md#games) is playable, tested on the Mac or iPhone; the table lists each with its build, SDK, engine and graphics API, and links its note, `dm/games/<id>/README.md`: what its profile needs and why, what was found on it, how to drive it on the Mac, what is open. [README.md](README.md) is the player-facing page (games, packing, playing); [docs/development.md](docs/development.md) has the internals, the script's options, building by hand, prewarm lists and power.
+ - Where to start:
+ 
+   | Task | Read first |
+@@ -11,6 +11,7 @@
+   | Work on one game, or a change to its profile | its note, `dm/games/<id>/README.md`, then [dm/games/README.md](dm/games/README.md) for the keys |
+   | Another Switch title | the NSP script (below), then [docs/agents](docs/agents/README.md) |
+   | Packing, building, prewarm lists, power | [docs/development.md](docs/development.md) |
++  | Building IPAs on Windows | [win/README.md](win/README.md) |
+   | Checking a change before a pull request | [06-dev-loop.md](docs/agents/06-dev-loop.md) |
+ - Where a new finding goes, once: a fact about one game (its passes, shader keys, measurements, why its profile needs a key or a cut, its status) in that game's note, in the section it belongs to and marked current or resolved; a general mechanism (a host or tool change that holds for other games) as an entry in its `docs/reference/<subsystem>.md` section (Symptom, Cause, Fix, Found on with the game's note linked), then `python3 dm/tools/docs_symptoms.py` to update the symptom index, and a line under the game note's "Found on this game". Link to a finding instead of repeating it. Adding a game takes its note and its row in the games table. Once Mac gameplay testing passes, add it to README's regular games gallery with a screenshot and IPA size (`docs/images/gallery.tsv`, then `dm/tools/docs_gallery.py`); Mac testing is sufficient for inclusion. Add caption notes only for noteworthy features or limitations (such as a 60 fps upgrade or controller requirement); otherwise show only the size. Keep testing milestones, platform and remaining validation in the game note. This file changes only when a rule does; it states no game count (the games table is the count). `dm/tools/tests/test_docs.py` checks the links and anchors, the notes and their table rows, the symptom index, and the length of this file (1,500 words) and of each guide in `docs/agents` (6,000).
+ - Each game's constants and shader tables form a game profile in `dm/games/<id>/`, where `<id>` is the base game's title ID: `game.tsv` plus the tables (and `patches.py` when the rewriter has patches for its builds). Mario's profile is `010015100B514000`. Tools pick the profile with `DM_GAME`; `make -C dm/host` and `build_ipa.sh` pick it with `GAME`. There is no default game: set it every time (the tools stop and list the profiles otherwise). Put per-game values in the profile, not in code ([dm/games/README.md](dm/games/README.md)).
+diff --git a/Build-IPA-GUI.bat b/Build-IPA-GUI.bat
+index 321b535..0164765 100644
+--- a/Build-IPA-GUI.bat
++++ b/Build-IPA-GUI.bat
+@@ -1,4 +1,10 @@
+ @echo off
+ rem NXNative Windows Builder: pick NSP files and prod.keys, then Build IPA File
+ cd /d "%~dp0"
++where pythonw >nul 2>nul
++if errorlevel 1 (
++    echo Python was not found. Install it from python.org and check "Add python.exe to PATH".
++    pause
++    exit /b 1
++)
+ start "" pythonw "%~dp0win\gui.pyw"
+diff --git a/README.md b/README.md
+index ea14559..198e92c 100644
+--- a/README.md
++++ b/README.md
+@@ -215,7 +215,15 @@ python -m pip install lz4 capstone fonttools pillow "backports.zstd; python_vers
+ 
+ You need Python 3.10 or later from [python.org](https://www.python.org/downloads/). Check "Add python.exe to PATH" when you install it.
+ 
+-### 2. Two downloads from Apple
++### 2. Get this repository
++
++```
++git clone https://github.com/zenvyzenshiro/NXNativeWindows.git E:\ProjectIOS\nxnative-win
++```
++
++Keep the checkout's line endings as they are. `.gitattributes` turns Git's CRLF conversion off, because the shader chain hashes source bytes.
++
++### 3. Two downloads from Apple
+ 
+ Sign in at [developer.apple.com/download](https://developer.apple.com/download/all/) with your Apple ID:
+ 
+@@ -231,14 +239,6 @@ Sign in at [developer.apple.com/download](https://developer.apple.com/download/a
+ 
+ Apple's Xcode and Apple SDKs Agreement covers these files. Read it before you use them on non-Apple hardware.
+ 
+-### 3. Get this repository
+-
+-```
+-git clone https://github.com/zenvyzenshiro/NXNativeWindows.git E:\ProjectIOS\nxnative-win
+-```
+-
+-Keep the checkout's line endings as they are. `.gitattributes` turns Git's CRLF conversion off, because the shader chain hashes source bytes.
+-
+ ### 4. Tell the build where the tools are
+ 
+ Copy `win\toolchain.example.json` to `win\toolchain.json` and fix the paths. Tools in their default install folders are found without it. For example:
+diff --git a/dm/ios/tools/pack_ipa.py b/dm/ios/tools/pack_ipa.py
+index daf3717..e19e5a3 100644
+--- a/dm/ios/tools/pack_ipa.py
++++ b/dm/ios/tools/pack_ipa.py
+@@ -21,7 +21,7 @@ BIG = 256 << 20      # files above this are streamed by the writer; smaller ones
+ WINDOW = 2 << 30     # input bytes in the pool at once
+ QUEUE = 4096         # entries in the pool at once (folders of tiny files)
+ CHUNK = 16 << 20
+-EXEC = set()   # --exec: archive paths that get mode 755 when packing on Windows (the app's executable)
++EXEC = set()   # --exec: archive paths that get mode 755 whatever the host's file says (the app's executable)
+ L32, L16 = 0xFFFFFFFF, 0xFFFF
+ DIR_MODE = stat.S_IFDIR | 0o755   # a parent folder no source folder stands for (Payload/, msl/); its time is 1980-01-01, so it is the same in every pack
+ Entry = collections.namedtuple('Entry', 'name path st root')   # st None: a synthetic parent; root: the mapping's source folder
+@@ -118,8 +118,9 @@ class Zip:
+         z = [v for v in (usize, csize, off) if v >= L32]   # zip64 extra: the fields that do not fit, in this order
+         ext = struct.pack(f'<HH{len(z)}Q', 1, 8 * len(z), *z) if z else b''
+         mode = e.st.st_mode if e.st else DIR_MODE
+-        if os.name == 'nt' and e.st:   # Windows has no Unix modes (files read as 0o666 without x): folders 755, the --exec files 755, everything else 644, as Info-ZIP on a Mac writes them
+-            mode = DIR_MODE if stat.S_ISDIR(mode) else stat.S_IFREG | (0o755 if e.name in EXEC else 0o644)
++        if e.st and e.name in EXEC: mode = stat.S_IFREG | 0o755   # the app's executable, whatever the host says (Windows has no x bit, a Linux source may not either)
++        elif os.name == 'nt' and e.st:   # Windows has no Unix modes (files read as 0o666 without x): folders 755, everything else 644, as Info-ZIP on a Mac writes them
++            mode = DIR_MODE if stat.S_ISDIR(mode) else stat.S_IFREG | 0o644
+         self.cd.append(struct.pack('<IHHHHHHIIIHHHHHII', 0x02014B50, 0x031E, 45 if z else 20 if method == 8 else 10, fl, method, t, d, crc, min(csize, L32), min(usize, L32),
+                                    len(nb), len(ext), 0, 0, 0, (mode << 16) | (0x10 if stat.S_ISDIR(mode) else 0), min(off, L32)) + nb + ext)
+         self.stats['deflated' if method == 8 else 'stored'] += usize
+@@ -235,7 +236,7 @@ def main():
+     ap.add_argument('--skip', action='append', default=[], help='an archive path left out of the folder walk that would add it')
+     ap.add_argument('--skip-suffix', action='append', default=[], help='files whose names end so are left out of every folder walk')
+     ap.add_argument('--no-reuse', action='store_true', help='pack every file again, without copying from the old IPA')
+-    ap.add_argument('--exec', action='append', default=[], help='an archive path packed with mode 755 on Windows, which has no x bit (the app executable)')
++    ap.add_argument('--exec', action='append', default=[], help='an archive path packed with mode 755 whatever the host platform says, which has no x bit on Windows (the app executable)')
+     a = ap.parse_args()
+     EXEC.update(p.strip('/') for p in a.exec)
+     maps = []
+diff --git a/dm/tools/lint_python_baseline.tsv b/dm/tools/lint_python_baseline.tsv
+index 4f16eb8..44d26b6 100644
+--- a/dm/tools/lint_python_baseline.tsv
++++ b/dm/tools/lint_python_baseline.tsv
+@@ -246,3 +246,45 @@ ruff	dm/tools/tests/test_nsp_nsz.py	F401	1	`sys` imported but unused
+ ruff	dm/tools/tests/test_spin_waits.py	F401	1	`sys` imported but unused
+ ruff	scripts/bench.py	B023	1	Function definition does not bind loop variable `ok`
+ ruff	scripts/build_ipa_from_nsp.py	B020	1	Loop control variable `note` overrides iterable it iterates
++pyright	win/arm64_emu.py	reportMissingImports	1	Import "unicorn" could not be resolved
++pyright	win/arm64_emu.py	reportMissingImports	1	Import "unicorn.arm64_const" could not be resolved
++pyright	win/arm64_emu.py	reportUndefinedVariable	1	"UC_ARM64_REG_CPACR_EL1" is not defined
++pyright	win/arm64_emu.py	reportUndefinedVariable	1	"UC_ARM64_REG_TPIDRRO_EL0" is not defined
++pyright	win/arm64_emu.py	reportUndefinedVariable	1	"UC_ARM64_REG_TPIDR_EL0" is not defined
++pyright	win/arm64_emu.py	reportUndefinedVariable	4	"UC_ARM64_REG_X0" is not defined
++pyright	win/arm64_emu.py	reportUndefinedVariable	1	"UC_ARM64_REG_SP" is not defined
++pyright	win/arm64_emu.py	reportUndefinedVariable	2	"UC_ARM64_REG_LR" is not defined
++pyright	win/arm64_emu.py	reportUndefinedVariable	1	"UC_ARM64_REG_X29" is not defined
++pyright	win/arm64_emu.py	reportUndefinedVariable	2	"UC_ARM64_REG_PC" is not defined
++pyright	win/build_app.py	reportAttributeAccessIssue	1	"LANCZOS" is not a known attribute of module "PIL.Image"
++pyright	win/build_app.py	reportOptionalMemberAccess	1	"iterdir" is not a known attribute of "None"
++pyright	win/build_ipa_windows.py	reportArgumentType	1	Argument of type "str | Unknown | Any | None" cannot be assigned to parameter "value" of type "str" in function "__setitem__" Type "str | Unknown | Any | None" is not assignable to type "str" "None" is not assignable to "str"
++pyright	win/build_ipa_windows.py	reportOptionalMemberAccess	3	"loader" is not a known attribute of "None"
++pyright	win/build_ipa_windows.py	reportOptionalMemberAccess	3	"exec_module" is not a known attribute of "None"
++pyright	win/build_ipa_windows.py	reportArgumentType	3	Argument of type "ModuleSpec | None" cannot be assigned to parameter "spec" of type "ModuleSpec" in function "module_from_spec" Type "ModuleSpec | None" is not assignable to type "ModuleSpec" "None" is not assignable to "ModuleSpec"
++pyright	win/build_ipa_windows.py	reportOptionalMemberAccess	1	"parent" is not a known attribute of "None"
++pyright	win/build_ipa_windows.py	reportAttributeAccessIssue	1	Cannot assign to attribute "TOOL_PATHS" for class "ModuleType" Attribute "TOOL_PATHS" is unknown
++pyright	win/build_ipa_windows.py	reportAttributeAccessIssue	1	Cannot assign to attribute "check_prereqs" for class "ModuleType" Attribute "check_prereqs" is unknown
++pyright	win/build_ipa_windows.py	reportAttributeAccessIssue	1	Cannot assign to attribute "build_nx_extract" for class "ModuleType" Attribute "build_nx_extract" is unknown
++pyright	win/build_ipa_windows.py	reportAttributeAccessIssue	1	Cannot assign to attribute "rewrite" for class "ModuleType" Attribute "rewrite" is unknown
++pyright	win/build_ipa_windows.py	reportAttributeAccessIssue	1	Cannot assign to attribute "patch_files" for class "ModuleType" Attribute "patch_files" is unknown
++pyright	win/build_ipa_windows.py	reportAttributeAccessIssue	2	Cannot assign to attribute "say" for class "ModuleType" Attribute "say" is unknown
++pyright	win/build_ipa_windows.py	reportAttributeAccessIssue	1	Cannot assign to attribute "report_profile_status" for class "ModuleType" Attribute "report_profile_status" is unknown
++pyright	win/build_ipa_windows.py	reportAttributeAccessIssue	1	Cannot assign to attribute "can_clone" for class "ModuleType" Attribute "can_clone" is unknown
++pyright	win/build_ipa_windows.py	reportAttributeAccessIssue	1	Cannot assign to attribute "apple_silicon" for class "ModuleType" Attribute "apple_silicon" is unknown
++pyright	win/build_ipa_windows.py	reportAttributeAccessIssue	1	Cannot assign to attribute "heap_check" for class "ModuleType" Attribute "heap_check" is unknown
++pyright	win/build_ipa_windows.py	reportAttributeAccessIssue	1	Cannot assign to attribute "region_check" for class "ModuleType" Attribute "region_check" is unknown
++pyright	win/build_ipa_windows.py	reportAttributeAccessIssue	1	Cannot assign to attribute "toolchain" for class "ModuleType" Attribute "toolchain" is unknown
++pyright	win/build_ipa_windows.py	reportAttributeAccessIssue	1	Cannot assign to attribute "capture_glslc" for class "ModuleType" Attribute "capture_glslc" is unknown
++pyright	win/build_ipa_windows.py	reportAttributeAccessIssue	1	Cannot assign to attribute "build_mac_host" for class "ModuleType" Attribute "build_mac_host" is unknown
++pyright	win/build_ipa_windows.py	reportAttributeAccessIssue	1	Cannot assign to attribute "UE_DECODE_SECS" for class "ModuleType" Attribute "UE_DECODE_SECS" is unknown
++pyright	win/build_ipa_windows.py	reportAttributeAccessIssue	1	Cannot assign to attribute "derive_profile" for class "ModuleType" Attribute "derive_profile" is unknown
++pyright	win/build_ipa_windows.py	reportAttributeAccessIssue	1	Cannot assign to attribute "capture_shaders" for class "ModuleType" Attribute "capture_shaders" is unknown
++pyright	win/pyshim/sitecustomize.py	reportOptionalMemberAccess	2	"exec_module" is not a known attribute of "None"
++pyright	win/pyshim/sitecustomize.py	reportAttributeAccessIssue	1	Cannot assign to attribute "exec_module" for class "Loader" Expression of type "(m: Unknown) -> None" cannot be assigned to attribute "exec_module" of class "Loader" Type "(m: Unknown) -> None" is not assignable to type "(module: ModuleType) -> None" Parameter name mismatch: "module" versus "m"
++pyright	win/sdk/extract_xip.py	reportOptionalMemberAccess	2	"find" is not a known attribute of "None"
++pyright	win/sdk/extract_xip.py	reportOptionalMemberAccess	1	"get" is not a known attribute of "None"
++pyright	win/sdk/extract_xip.py	reportArgumentType	2	Argument of type "str | None" cannot be assigned to parameter "x" of type "ConvertibleToInt" in function "__new__" Type "str | None" is not assignable to type "ConvertibleToInt" Type "None" is not assignable to type "ConvertibleToInt" "None" is not assignable to "str" "None" is incompatible with protocol "Buffer" "__buffer__" is not present "None" is incompatible with protocol "SupportsInt" "__int__" is not present "None" is incompatible with protocol "SupportsIndex" ...
++pyright	win/sdk/extract_xip.py	reportArgumentType	2	Argument of type "str | None" cannot be assigned to parameter "x" of type "ConvertibleToInt" in function "__new__" Type "str | None" is not assignable to type "ConvertibleToInt" Type "None" is not assignable to type "ConvertibleToInt" "None" is not assignable to "str" "None" is incompatible with protocol "Buffer" "__buffer__" is not present "None" is incompatible with protocol "SupportsInt" "__int__" is not present "None" is incompatible with protocol "SupportsIndex"
++pyright	win/sdk/extract_xip.py	reportOptionalMemberAccess	2	"findtext" is not a known attribute of "None"
++pyright	win/tests/test_win.py	reportMissingImports	1	Import "texture2ddecoder" could not be resolved
+diff --git a/docs/playing.md b/docs/playing.md
+index bdf4378..c310f00 100644
+--- a/docs/playing.md
++++ b/docs/playing.md
+@@ -1,6 +1,6 @@
+ # Playing
+ 
+-How to build and install a game: [README](../README.md#how-to-play).
++How to build and install a game: [README](../README.md#install-the-ipa-on-your-iphone-or-ipad).
+ 
+ - **Settings:** a screen before the game starts sets frame rate, resolution, docked or handheld mode, language, rumble and more. Tap **Play**; your choices are remembered. What each one does: [Settings](settings.md).
+ - **Saves and logs** are in the Files app, under the game's name: `save/` and `log.txt` (the previous run is `log.prev.txt`). When something goes wrong, send `log.txt`.
+diff --git a/pyproject.toml b/pyproject.toml
+index b4c1a29..15a29d1 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -1,16 +1,24 @@
+ # Configuration of the Python lint and type checks only (.github/workflows/lint-python.yml, dm/tools/lint_python.py); the repository is not a Python package.
+-# Scope: scripts/ and the tools under dm/. extraPaths / extra-paths are the folders the tools put on sys.path to import each other.
++# Scope: scripts/, the tools under dm/, and the Windows port under win/. extraPaths / extra-paths are the folders the tools put on sys.path to import each other.
+ 
+ [tool.pyright]
+-include = ["scripts", "dm/tools", "dm/gfx/tools", "dm/games/game.py", "dm/games/profile_guess.py", "dm/games/settings.py", "dm/ios/tools", "dm/mac"]
+-extraPaths = ["dm/tools", "dm/gfx/tools", "dm/games", "dm/ios/tools", "dm/mac"]
++include = ["scripts", "dm/tools", "dm/gfx/tools", "dm/games/game.py", "dm/games/profile_guess.py", "dm/games/settings.py", "dm/ios/tools", "dm/mac", "win"]
++extraPaths = ["dm/tools", "dm/gfx/tools", "dm/games", "dm/ios/tools", "dm/mac", "win"]
+ typeCheckingMode = "basic"
++# Versions: minimum 3.10 (README), the lint CI and this check on 3.14, the machine the fork was tested on 3.15.
+ pythonVersion = "3.14"
+ pythonPlatform = "Darwin"
+ 
++# The Windows port uses the platform's own stdlib modules (msvcrt, winreg) that typeshed hides on Darwin; the rest of the repository stays on Darwin, as the lint job's runner comment documents.
++# Its extraPaths add the folders the code puts on sys.path itself (dm/tools, dm/games, win/sdk), so its imports of them resolve.
++[[tool.pyright.executionEnvironments]]
++root = "win"
++pythonPlatform = "Windows"
++extraPaths = ["win", "dm/tools", "dm/games", "win/sdk"]
++
+ [tool.ruff]
+ target-version = "py310"
+-include = ["scripts/**/*.py", "dm/tools/**/*.py", "dm/gfx/tools/**/*.py", "dm/games/*.py", "dm/ios/tools/**/*.py", "dm/mac/**/*.py"]
++include = ["scripts/**/*.py", "dm/tools/**/*.py", "dm/gfx/tools/**/*.py", "dm/games/*.py", "dm/ios/tools/**/*.py", "dm/mac/**/*.py", "win/**/*.py", "win/**/*.pyw"]
+ 
+ # Rules that find bugs (pyflakes, syntax, bugbear, pylint's errors and warnings, a few of ruff's own), not style: the code's dense layout (several statements on a
+ # line, star imports of the rewriter's tables, short names) is the house style, so those rules are off, and `ruff format` is not used.
+diff --git a/win/README.md b/win/README.md
+index 5aa4094..c59eeb4 100644
+--- a/win/README.md
++++ b/win/README.md
+@@ -80,6 +80,16 @@ The options are the upstream script's (`-h`). Only `--platform ios` exists here.
+ - **Xcode 27's `.xip`** is a sorted, deduplicated cpio (Metadata `xbs_sortcpio`). Only one entry of each hard-linked inode carries the bytes; the others hold a `NULLcanary` placeholder of the same size. `extract_xip.py` reads the archive twice: the first pass finds the entry that carries each inode's bytes, the second writes them to every SDK path. The extractor also resolves symlinks that point through other symlinks (`Headers → Versions/Current/Headers`).
+ - **Line endings:** the checkout must keep LF (see `.gitattributes`). The shader chain hashes source bytes, so a CRLF checkout breaks `dmsh_xlate --source-sha`.
+ 
++### The window as an exe
++
++`Build-IPA-GUI.bat` needs Python's folder on PATH. `win/gui_launcher` builds a native `Build-IPA-GUI.exe` (Go, standard library only) that does the same job with friendlier failures: it looks pythonw.exe up in `NXW_PYTHONW`, then on PATH, then in Python's default install folders (newest version wins), then through the `py` launcher, and shows a message box instead of a console error when Python is missing or the exe was moved out of the repository root. The window it starts is still `win/gui.pyw` with the machine's Python, so the pipeline behaves exactly as when the `.bat` starts it. It cross-compiles from Linux (and builds natively on Windows with `GO111MODULE=off`):
++
++```
++CGO_ENABLED=0 GO111MODULE=off GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w -H=windowsgui" -o Build-IPA-GUI.exe ./win/gui_launcher
++```
++
++`win/gui_launcher/icon.ico` (the window's black-and-pink play triangle) is embedded through `rsrc_windows_amd64.syso`; rebuild that file with `go run github.com/akavel/rsrc@latest -ico icon.ico -o rsrc_windows_amd64.syso` after changing the icon. `go test ./win/gui_launcher` (any OS, `GO111MODULE=off`) covers the Python lookup's precedence.
++
+ ## Open risks
+ 
+ These risks remain until a real game is built and played. Check each one in this order:
+diff --git a/win/TUTORIAL.md b/win/TUTORIAL.md
+index a925f10..15339fe 100644
+--- a/win/TUTORIAL.md
++++ b/win/TUTORIAL.md
+@@ -17,10 +17,16 @@ winget install --id LLVM.LLVM -e
+ winget install --id Microsoft.DotNet.SDK.10 -e
+ winget install --id KhronosGroup.VulkanSDK -e
+ winget install --id Meta.Zstandard -e
+-python -m pip install lz4 capstone fonttools pillow
++python -m pip install lz4 capstone fonttools pillow "backports.zstd; python_version < '3.14'"
+ ```
+ 
+-Python harus sudah terpasang (python.org, versi 3.10 atau lebih baru). Dua alat dari Apple perlu login Apple ID gratis di developer.apple.com/download:
++Python harus sudah terpasang (python.org, versi 3.10 atau lebih baru). Lalu salin (clone) repositori ini dulu — skrip ekstraksi SDK di langkah berikutnya ada di dalamnya:
++
++```
++git clone https://github.com/zenvyzenshiro/NXNativeWindows.git E:\ProjectIOS\nxnative-win
++```
++
++Dua alat dari Apple perlu login Apple ID gratis di developer.apple.com/download:
+ 
+ 1. **Metal Developer Tools for Windows.** Install, lalu catat foldernya (misalnya `E:\ProjectIOS\Metal Developer Tools`).
+ 2. **Xcode 26 atau 27** (file `.xip`). Ekstrak SDK iPhone darinya, cukup sekali (sekitar 1–2 menit):
+diff --git a/win/arm64_emu.py b/win/arm64_emu.py
+index 9f76a71..cd47e18 100644
+--- a/win/arm64_emu.py
++++ b/win/arm64_emu.py
+@@ -6,7 +6,7 @@
+ # The machine has no kernel: only code that computes (decoders, compilers) can run here, which is all these steps need.
+ import struct
+ from pathlib import Path
+-from unicorn import Uc, UcError, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_INTR, UC_HOOK_MEM_INVALID, UC_PROT_ALL
++from unicorn import Uc, UcError, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_INTR, UC_PROT_ALL
+ from unicorn.arm64_const import *
+ 
+ PAGE = 0x1000
+diff --git a/win/build_app.py b/win/build_app.py
+index 6d8df52..c9d4f9b 100644
+--- a/win/build_app.py
++++ b/win/build_app.py
+@@ -9,7 +9,7 @@
+ # Inputs: the same environment as build_ipa.sh (GAME, W, PATCHED, ROMFS, MSL_IOS, AOC, GFXAPI, DM_DISPLAY_NAME, DM_APP_VERSION, DM_BUNDLE_ID, DM_SHOW_FPS, DM_LANG, DM_ENV_FILE, DM_ICON, STD_FONT).
+ # Usage: win/build_app.py [output.ipa]   (--prepare-xcode is a Mac-only mode)
+ # It never signs: the sideloading tool (Sideloadly, AltStore, ...) signs the IPA, as with the upstream build.
+-import concurrent.futures as cf, hashlib, json, os, plistlib, re, shutil, subprocess, sys, time
++import concurrent.futures as cf, hashlib, os, plistlib, re, shutil, subprocess, sys, time
+ from pathlib import Path
+ WIN = Path(__file__).resolve().parent
+ sys.path.insert(0, str(WIN))
+@@ -86,7 +86,6 @@ def compile_all(clang, sdk, files, incs, obj_dir, extra_defs):
+     obj_dir.mkdir(parents=True, exist_ok=True)
+     jobs, objs = [], []
+     for f in files:
+-        name = f.name
+         if f == (HOST / 'main.c').resolve(): flags = common + ['-std=gnu11', '-Dmain=dm_main']   # the host's main, started by main.m (project.yml compilerFlags)
+         elif f.suffix == '.c': flags = common + ['-std=gnu11']
+         elif f.suffix == '.m': flags = common + ['-std=gnu11', '-fobjc-arc']
+@@ -245,7 +244,7 @@ def main():
+     sys.path.insert(0, str(DM / 'games')); import game as gm
+     prof = gm.load(game)
+     gd = prof.dir
+-    gp = lambda k: prof.get(k)
++    gp = prof.get
+     if not (gd / 'game.tsv').exists(): die(f'no game profile {gd}/game.tsv')
+     pkg = gp('package')
+     patched = Path(env.get('PATCHED') or w / f'build/patched_{pkg}')
+@@ -274,8 +273,8 @@ def main():
+     if image and env.get('NXW_MODS_ROMFS'): die('mods\' RomFS folders are laid over a RomFS folder, and this extraction is one RomFS image (RomFS.img)')
+     if image and env.get('NXW_SPLIT_DATA', '') not in ('', '0'): die('a split build copies the RomFS as a folder, and this extraction is one RomFS image (RomFS.img): build without --split-data')
+     if env.get('NXW_MODS_ROMFS'):   # mods' RomFS folders (win/mods.py): hard links of the game's files with the mods' laid over them
+-        import mods
+-        romfs = mods.overlay_romfs(romfs, env['NXW_MODS_ROMFS'].split(os.pathsep), w / 'build/romfs_mods', log=t)
++        import mods as mods_mod   # not "mods": that name is the profile's module list here, and the import would rebind it and break the *mods below
++        romfs = mods_mod.overlay_romfs(romfs, env['NXW_MODS_ROMFS'].split(os.pathsep), w / 'build/romfs_mods', log=t)
+     hdr = (DM / 'gfx/nvn/dmsh_chain.h').read_text(encoding='utf-8')
+     v = (re.search(r'^#define DMSH_CHAIN "(.*)"', hdr, re.M) or die('no DMSH_CHAIN in dmsh_chain.h')).group(1)
+     gfx = env.get('GFXAPI') or ('nvn' if list((msl_ios / f'b-{v}').glob('*_b.metallib')) else 'vulkan' if (msl_ios / 'vk/vk_shaders.metallib').exists()
+diff --git a/win/build_ipa_windows.py b/win/build_ipa_windows.py
+index 07b06aa..dabbc62 100644
+--- a/win/build_ipa_windows.py
++++ b/win/build_ipa_windows.py
+@@ -8,7 +8,7 @@
+ #   Mac host steps       → refused with a clear message: games whose shaders exist only at run time (GLSLC / Vulkan / GL capture, Unreal and Oodle decoding)
+ #                          boot the game's own arm64 code in the Mac host, which no Windows PC can run
+ # Usage: python win/build_ipa_windows.py <NSP folder> -k <prod.keys> [the upstream script's other options]   (--platform mac / mac-app and --prepare-xcode are Mac-only)
+-import importlib.util, json, os, shutil, subprocess, sys, time
++import importlib.util, os, shutil, subprocess, sys, time
+ from pathlib import Path
+ 
+ WIN = Path(__file__).resolve().parent
+diff --git a/win/doctor.py b/win/doctor.py
+index e9bf3a2..0154676 100644
+--- a/win/doctor.py
++++ b/win/doctor.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ # Checks the Windows toolchain the nxnative Windows port needs and says how to get what is missing. Exit code 0 = everything a build needs is there.
+ # Usage: win/doctor.py [--json]
+-import importlib, importlib.util, json, os, subprocess, sys
++import importlib, importlib.util, json, subprocess, sys
+ from pathlib import Path
+ sys.path.insert(0, str(Path(__file__).resolve().parent))
+ import toolchain as tc
+diff --git a/win/gui_launcher/box_other.go b/win/gui_launcher/box_other.go
+new file mode 100644
+index 0000000..c0841f7
+--- /dev/null
++++ b/win/gui_launcher/box_other.go
+@@ -0,0 +1,14 @@
++//go:build !windows
++
++// Non-Windows stub, so `go vet` / `go build` of the package also work on the
++// machine that cross-compiles it. The exe itself is only built for windows/amd64.
++package main
++
++import (
++	"fmt"
++	"os"
++)
++
++func box(text string) {
++	fmt.Fprintln(os.Stderr, text)
++}
+diff --git a/win/gui_launcher/box_windows.go b/win/gui_launcher/box_windows.go
+new file mode 100644
+index 0000000..3d69fdb
+--- /dev/null
++++ b/win/gui_launcher/box_windows.go
+@@ -0,0 +1,20 @@
++//go:build windows
++
++// The message box lives in a Windows-only file: user32's MessageBoxW, reached
++// through syscall, so the launcher needs no module dependencies. Errors reach a
++// double-clicking user even though the exe has no console (windowsgui).
++package main
++
++import (
++	"syscall"
++	"unsafe"
++)
++
++func box(text string) {
++	user32 := syscall.NewLazyDLL("user32.dll")
++	mbox := user32.NewProc("MessageBoxW")
++	title, _ := syscall.UTF16PtrFromString("NXNative for Windows")
++	body, _ := syscall.UTF16PtrFromString(text)
++	// 0 = MB_OK, 0x10 = MB_ICONERROR
++	mbox.Call(0, uintptr(unsafe.Pointer(body)), uintptr(unsafe.Pointer(title)), 0x10)
++}
+diff --git a/win/gui_launcher/icon.ico b/win/gui_launcher/icon.ico
+new file mode 100644
+index 0000000..f5405a3
+Binary files /dev/null and b/win/gui_launcher/icon.ico differ
+diff --git a/win/gui_launcher/main.go b/win/gui_launcher/main.go
+new file mode 100644
+index 0000000..d0e9236
+--- /dev/null
++++ b/win/gui_launcher/main.go
+@@ -0,0 +1,146 @@
++// Build-IPA-GUI.exe: a native Windows launcher for the builder window (win/gui.pyw).
++// Same job as Build-IPA-GUI.bat: find Python's pythonw.exe and start the window with it.
++// Differences from the .bat: no "pythonw is not recognized" console flash — a message box
++// explains what to install, and Python installs that never made it onto PATH are found in
++// their default folders. The pipeline itself is untouched: the window still runs
++// win/build_ipa_windows.py with the same python.exe (gui.pyw's console_python()).
++//
++// Build (cross-compiles from Linux, runs on Windows 10/11 x64):
++//
++//	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w -H=windowsgui" -o Build-IPA-GUI.exe .
++//
++// An optional icon: put a rsrc_windows_amd64.syso beside main.go before the build
++//
++//	(rsrc -ico icon.ico -o rsrc_windows_amd64.syso).
++package main
++
++import (
++	"os"
++	"os/exec"
++	"path/filepath"
++	"sort"
++	"strconv"
++	"strings"
++)
++
++func main() {
++	// The exe belongs in the repository root, next to Build-IPA-GUI.bat.
++	exe, err := os.Executable()
++	if err != nil {
++		exe = os.Args[0]
++	}
++	repo := filepath.Dir(exe)
++	script := filepath.Join(repo, "win", "gui.pyw")
++	if _, err := os.Stat(script); err != nil {
++		box("Build-IPA-GUI.exe must stay in the repository root, the folder that contains win\\.\n" +
++			"Keep it next to Build-IPA-GUI.bat.")
++		os.Exit(1)
++	}
++
++	pythonw, ok := findPythonw()
++	if !ok {
++		box("Python was not found.\n\n" +
++			"Install it from https://www.python.org/downloads/ (3.10 or later) and\n" +
++			"check \"Add python.exe to PATH\" in the installer's first page.\n\n" +
++			"Already installed? Set the NXW_PYTHONW environment variable to the full\n" +
++			"path of pythonw.exe, or put its folder on PATH.")
++		os.Exit(1)
++	}
++
++	cmd := exec.Command(pythonw, script)
++	cmd.Dir = repo
++	if err := cmd.Start(); err != nil {
++		box("Could not start the builder window with:\n" + pythonw + "\n\n" + err.Error())
++		os.Exit(1)
++	}
++	// Detached like the .bat's `start`: the launcher exits, the window stays.
++	os.Exit(0)
++}
++
++// findPythonw returns the best pythonw.exe: the NXW_PYTHONW override, PATH
++// (what `where pythonw` finds, as the .bat), the newest default-folder install,
++// then the py launcher's Python.
++func findPythonw() (string, bool) {
++	if p := os.Getenv("NXW_PYTHONW"); p != "" {
++		if isFile(p) {
++			return p, true
++		}
++	}
++	if p, err := exec.LookPath("pythonw.exe"); err == nil {
++		return p, true
++	}
++	if p := newestDefaultInstall(); p != "" {
++		return p, true
++	}
++	if p := fromPyLauncher(); p != "" {
++		return p, true
++	}
++	return "", false
++}
++
++// newestDefaultInstall picks the highest-version pythonw.exe from Python's
++// default install folders (per-user under LOCALAPPDATA, machine-wide under
++// Program Files). Nothing here needs the registry.
++func newestDefaultInstall() string {
++	local := os.Getenv("LOCALAPPDATA")
++	patterns := []string{
++		filepath.Join(local, "Programs", "Python", "Python3*", "pythonw.exe"),
++		`C:\Program Files\Python3*\pythonw.exe`,
++		`C:\Program Files (x86)\Python3*\pythonw.exe`,
++	}
++	var found []string
++	for _, pat := range patterns {
++		if matches, _ := filepath.Glob(pat); matches != nil {
++			found = append(found, matches...)
++		}
++	}
++	if len(found) == 0 {
++		return ""
++	}
++	sort.Slice(found, func(i, j int) bool { return versionOf(found[i]) > versionOf(found[j]) })
++	return found[0]
++}
++
++// versionOf sorts Python3XX / Python3XX-32 / Python3XX-ARM folder names newest
++// first. Only the digits of the version number count: a "-32" or "-arm64"
++// suffix must not turn 3.12's folder into "31232" and beat 3.13's "313".
++func versionOf(p string) int {
++	v := 0
++	for _, part := range strings.Split(strings.ReplaceAll(p, `\`, "/"), "/") {
++		if !strings.HasPrefix(part, "Python3") {
++			continue
++		}
++		rest := strings.TrimPrefix(part, "Python")
++		end := 0
++		for end < len(rest) && rest[end] >= '0' && rest[end] <= '9' {
++			end++
++		}
++		if n, err := strconv.Atoi(rest[:end]); err == nil && n > v {
++			v = n
++		}
++	}
++	return v
++}
++
++// fromPyLauncher asks the installed py launcher where its Python 3 lives and
++// returns the pythonw.exe beside it.
++func fromPyLauncher() string {
++	py, err := exec.LookPath("py.exe")
++	if err != nil {
++		return ""
++	}
++	out, err := exec.Command(py, "-3", "-c", "import os,sys;print(os.path.join(sys.prefix,'pythonw.exe'))").Output()
++	if err != nil {
++		return ""
++	}
++	p := strings.TrimSpace(string(out))
++	if isFile(p) {
++		return p
++	}
++	return ""
++}
++
++func isFile(p string) bool {
++	info, err := os.Stat(p)
++	return err == nil && !info.IsDir()
++}
+diff --git a/win/gui_launcher/main_test.go b/win/gui_launcher/main_test.go
+new file mode 100644
+index 0000000..d267eb9
+--- /dev/null
++++ b/win/gui_launcher/main_test.go
+@@ -0,0 +1,72 @@
++package main
++
++import (
++	"os"
++	"path/filepath"
++	"runtime"
++	"testing"
++)
++
++func TestVersionOf(t *testing.T) {
++	cases := map[string]int{
++		`C:\Program Files\Python313\pythonw.exe`:                               313,
++		`C:\Program Files\Python310\pythonw.exe`:                               310,
++		`C:\Users\x\AppData\Local\Programs\Python\Python312-32\pythonw.exe`:    312,
++		`C:\Users\x\AppData\Local\Programs\Python\Python314-arm64\pythonw.exe`: 314,
++		`C:\not\python\pythonw.exe`:                                            0,
++	}
++	for path, want := range cases {
++		if got := versionOf(path); got != want {
++			t.Errorf("versionOf(%q) = %d, want %d", path, got, want)
++		}
++	}
++}
++
++// newestDefaultInstall is only checked through the LOCALAPPDATA pattern: the
++// Program Files patterns would read a real machine's installs on Windows.
++func TestNewestDefaultInstall(t *testing.T) {
++	if runtime.GOOS == "windows" {
++		t.Skip("the Program Files patterns would read this machine's real installs")
++	}
++	local := t.TempDir()
++	t.Setenv("LOCALAPPDATA", local)
++	for _, v := range []string{"Python310", "Python313", "Python312"} {
++		dir := filepath.Join(local, "Programs", "Python", v)
++		if err := os.MkdirAll(dir, 0o755); err != nil {
++			t.Fatal(err)
++		}
++		if err := os.WriteFile(filepath.Join(dir, "pythonw.exe"), []byte("x"), 0o755); err != nil {
++			t.Fatal(err)
++		}
++	}
++	got := newestDefaultInstall()
++	if want := filepath.Join(local, "Programs", "Python", "Python313", "pythonw.exe"); got != want {
++		t.Errorf("newestDefaultInstall() = %q, want %q", got, want)
++	}
++}
++
++func TestFindPythonwEnvBeatsPath(t *testing.T) {
++	dir := t.TempDir()
++	onPath := filepath.Join(dir, "pythonw.exe")
++	if err := os.WriteFile(onPath, []byte("x"), 0o755); err != nil {
++		t.Fatal(err)
++	}
++	override := filepath.Join(dir, "override", "pythonw.exe")
++	if err := os.MkdirAll(filepath.Dir(override), 0o755); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(override, []byte("x"), 0o755); err != nil {
++		t.Fatal(err)
++	}
++
++	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
++	t.Setenv("NXW_PYTHONW", "")
++	if got, ok := findPythonw(); !ok || got != onPath {
++		t.Errorf("with PATH only: findPythonw() = %q, %v; want %q, true", got, ok, onPath)
++	}
++
++	t.Setenv("NXW_PYTHONW", override)
++	if got, ok := findPythonw(); !ok || got != override {
++		t.Errorf("with override: findPythonw() = %q, %v; want %q, true", got, ok, override)
++	}
++}
+diff --git a/win/gui_launcher/rsrc_windows_amd64.syso b/win/gui_launcher/rsrc_windows_amd64.syso
+new file mode 100644
+index 0000000..fed5d33
+Binary files /dev/null and b/win/gui_launcher/rsrc_windows_amd64.syso differ
+diff --git a/win/love_shaders.py b/win/love_shaders.py
+index f76b990..4e07a99 100644
+--- a/win/love_shaders.py
++++ b/win/love_shaders.py
+@@ -50,7 +50,7 @@ def blocks(lua):
+             out['VERSION'] = {t: {False: n, True: es} for t, n, es in re.findall(r'(\w+)\s*=\s*\{\s*\[false\]\s*=\s*"([^"]*)"\s*,\s*\[true\]\s*=\s*"([^"]*)"', body)}
+             continue
+         while True:   # the table's entries one by one: its long strings may hold lines starting with "}"
+-            ws = re.compile(r'(?:\s|,|--[^\n]*)*').match(lua, pos); pos = ws.end()
++            ws = re.compile(r'(?:\s|,|--[^\n]*)*').match(lua, pos); pos = ws.end()   # pyright: ignore[reportOptionalMemberAccess] — the pattern also matches the empty string, so match() never returns None
+             if lua.startswith('}', pos): break
+             e = LONG.match(lua, pos)
+             if not e: raise ValueError(f'unexpected Lua in table {name} at {lua[pos:pos + 40]!r}')
+diff --git a/win/mods.py b/win/mods.py
+index 2f55fa0..2ce7d97 100644
+--- a/win/mods.py
++++ b/win/mods.py
+@@ -5,7 +5,7 @@
+ # Code patches become rewriter cuts (dm/tools/patch_nso.py "Registered patches": the original bytes are asserted, then replaced before the rewrite), so they reach the iPhone
+ # as the profile's own patches do: they apply only to the module whose build ID they name, and a patch for another game version is reported and skipped.
+ # A patch overlapping a cut the game profile already makes is skipped too (the profile's fix wins). RomFS files are overlaid on the packed version's RomFS by hard links.
+-import os, re, struct, sys
++import os, re, sys
+ from pathlib import Path
+ 
+ HERE = Path(__file__).resolve().parent
+diff --git a/win/pyshim/sitecustomize.py b/win/pyshim/sitecustomize.py
+index 37ec253..a03a8c4 100644
+--- a/win/pyshim/sitecustomize.py
++++ b/win/pyshim/sitecustomize.py
+@@ -49,8 +49,8 @@ if (os.name == 'nt' or os.environ.get('NXW_LINUX')) and not os.environ.get('NXW_
+         restype = argtypes = None
+         def __call__(self, op, alg, options, key, keylen, iv, data, datalen, out, outlen, moved):
+             if alg != 0 or options not in (0, 2): return -4301   # kCCUnimplemented: only AES (0) in ECB mode (2), unpadded
+-            from ctypes import wintypes, byref, c_void_p, c_ulong, create_unicode_buffer
+-            bc = ctypes.WinDLL('bcrypt'); h = c_void_p(); hk = c_void_p(); res = c_ulong()
++            from ctypes import byref, c_void_p, c_ulong, create_unicode_buffer
++            bc = ctypes.WinDLL('bcrypt'); h = c_void_p(); hk = c_void_p(); res = c_ulong()   # pyright: ignore[reportAttributeAccessIssue] — ctypes.WinDLL exists on Windows; pyright resolves ctypes from the local CPython source, whose _os.name guard it cannot narrow
+             if bc.BCryptOpenAlgorithmProvider(byref(h), ctypes.c_wchar_p('AES'), None, 0): return -4300
+             try:
+                 mode = create_unicode_buffer('ChainingModeECB')
+@@ -114,7 +114,7 @@ if (os.name == 'nt' or os.environ.get('NXW_LINUX')) and not os.environ.get('NXW_
+         def _spec_from_file_location(name, location=None, *a, **k):
+             spec = _sffl(name, location, *a, **k)
+             loc = os.fspath(location).replace(chr(92), '/') if location else ''
+-            if spec and name.startswith('patches_') and (loc.endswith('dm/tools/sdk_patches.py') or loc.endswith('/patches.py')):
++            if spec and name.startswith('patches_') and loc.endswith(('dm/tools/sdk_patches.py', '/patches.py')):
+                 load = spec.loader.exec_module
+                 def exec_module(m):
+                     load(m)
+diff --git a/win/tests/test_win.py b/win/tests/test_win.py
+index 5dbf82c..030c858 100644
+--- a/win/tests/test_win.py
++++ b/win/tests/test_win.py
+@@ -1,6 +1,6 @@
+ #!/usr/bin/env python3
+ # Unit tests of the Windows port's pure-Python parts (no SDK, Metal tools or game files needed): python win/tests/test_win.py
+-import io, lzma, os, plistlib, struct, subprocess, sys, tempfile, unittest, zlib, zipfile
++import lzma, os, plistlib, struct, subprocess, sys, tempfile, unittest, zlib, zipfile
+ from pathlib import Path
+ WIN = Path(__file__).resolve().parents[1]
+ REPO = WIN.parent
+@@ -124,7 +124,7 @@ class BcSoft(unittest.TestCase):
+     def test_astc(self):
+         """BC → ASTC 4x4 (nvn_bc_astc), decoded by texture2ddecoder: BC1 four-colour blocks keep their palette (within 2), other blocks are a close fit and never the error colour"""
+         try: import texture2ddecoder
+-        except ImportError: raise unittest.SkipTest('pip install texture2ddecoder')
++        except ImportError: raise unittest.SkipTest('pip install texture2ddecoder') from None
+         import ctypes, random
+         rnd = random.Random(11)
+         def astc(pf, b):
+diff --git a/win/toolchain.py b/win/toolchain.py
+index 9b0bee1..e3625eb 100644
+--- a/win/toolchain.py
++++ b/win/toolchain.py
+@@ -34,7 +34,7 @@ def setting(key, default=None):
+ 
+ if not WINDOWS:
+     os.environ.setdefault('WINEDEBUG', '-all')   # Wine's own fixme / err lines would fill the shader build's logs
+-    if setting('wineprefix'): os.environ.setdefault('WINEPREFIX', os.path.expanduser(setting('wineprefix')))   # a prefix of its own keeps the Metal compiler's module cache apart
++    if (wp := setting('wineprefix')): os.environ.setdefault('WINEPREFIX', os.path.expanduser(wp))   # a prefix of its own keeps the Metal compiler's module cache apart
+ 
+ 
+ def wine():
+diff --git a/win/xcrun.py b/win/xcrun.py
+index 10eabab..0221d0d 100644
+--- a/win/xcrun.py
++++ b/win/xcrun.py
+@@ -6,7 +6,7 @@
+ #   xcrun -sdk iphoneos clang [args]            LLVM clang -target arm64-apple-ios<IOS_DEPLOYMENT> -isysroot <iPhoneOS SDK> (compile_check.py); -o /dev/null becomes NUL
+ #   xcrun [-sdk ...] --show-sdk-version | --show-sdk-build-version | --show-sdk-path
+ # Anything else exits 127 with a message naming the call, so a missing mapping is visible in the build log instead of a silent wrong result.
+-import os, subprocess, sys
++import subprocess, sys
+ from pathlib import Path
+ sys.path.insert(0, str(Path(__file__).resolve().parent))
+ import toolchain as tc
+@@ -17,9 +17,9 @@ def metal_args(sdk, args):
+     for a in args:
+         if a.startswith('-mios-version-min='):
+             out += ['-target', f'air64-apple-ios{a.split("=", 1)[1]}']; has_target = True; continue
+-        if a.startswith('-mmacosx-version-min=') or a.startswith('-mmacos-version-min='):
++        if a.startswith(('-mmacosx-version-min=', '-mmacos-version-min=')):
+             out += ['-target', f'air64-apple-macos{a.split("=", 1)[1]}']; has_target = True; continue
+-        if a in ('-target', '--target') or a.startswith('-target=') or a.startswith('--target='): has_target = True
++        if a in ('-target', '--target') or a.startswith(('-target=', '--target=')): has_target = True
+         out.append(a)
+     if not has_target and not any(a in ('--version', '-v', '--help') for a in args):
+         tgt = f'air64-apple-ios{tc.setting("metal_ios_target", "18.0")}' if sdk.startswith('iphone') else f'air64-apple-macos{tc.setting("metal_macos_target", tc.METAL_MACOS_TARGET)}'
